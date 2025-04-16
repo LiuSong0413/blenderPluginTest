@@ -11,9 +11,12 @@ bl_info = {
 import bpy
 import bmesh
 import numpy as np
+
 from mathutils import Vector, Color
 from bpy.types import Operator, Panel
 from bpy.props import FloatVectorProperty, FloatProperty
+
+from mathutils.bvhtree import BVHTree  # 必须添加这行导入
 
 class BAKETOOLS_PT_vertex_color_baker(Panel):
     bl_label = "顶点颜色烘焙"
@@ -253,20 +256,44 @@ def bake_vertex_colors(context, obj, props):
     # 添加模糊效果
     blur_vertex_colors(mesh, props.color_layer_name, iterations=2)
 
+# def calculate_ao_for_vertex_world(context, obj, vert_world_pos, vert_normal, samples=32, distance=1.0):
+#     """计算顶点的AO值"""
+#     ao = 0.0
+#     depsgraph = context.evaluated_depsgraph_get()
+#     obj_eval = obj.evaluated_get(depsgraph)
+
+#     for _ in range(samples):
+#         sample_dir = vert_normal + Vector(np.random.uniform(-1, 1, 3))
+#         sample_dir.normalize()
+#         origin = vert_world_pos + vert_normal * 0.01
+#         hit, *_ = context.scene.ray_cast(depsgraph, origin, sample_dir, distance=distance)
+#         if hit:
+#             ao += 1.0
+
+#     return 1.0 - (ao / samples)
+
 def calculate_ao_for_vertex_world(context, obj, vert_world_pos, vert_normal, samples=32, distance=1.0):
-    """计算顶点的AO值"""
-    ao = 0.0
+    """兼容性更强的降级方案"""
+    ao = 0
     depsgraph = context.evaluated_depsgraph_get()
-    obj_eval = obj.evaluated_get(depsgraph)
+    
+    # 尝试使用BVH加速
+    try:
+        from mathutils.bvhtree import BVHTree
+        bvh = BVHTree.FromObject(obj, depsgraph, margin=distance)
+        ray_cast = bvh.ray_cast
+        print("INFO: 使用 BVH 加速方法")  # 仅控制台可见
+    except:  # 降级到原生方法
+        print("INFO: 使用原生射线投射方法")  # 仅控制台可见
+        scene = context.scene
+        def ray_cast(orig, dir, dist):
+            return scene.ray_cast(depsgraph, orig, dir, distance=dist)[0]
 
+    origin = vert_world_pos + vert_normal * 0.01
     for _ in range(samples):
-        sample_dir = vert_normal + Vector(np.random.uniform(-1, 1, 3))
-        sample_dir.normalize()
-        origin = vert_world_pos + vert_normal * 0.01
-        hit, *_ = context.scene.ray_cast(depsgraph, origin, sample_dir, distance=distance)
-        if hit:
-            ao += 1.0
-
+        sample_dir = (vert_normal + Vector(np.random.uniform(-1, 1, 3))).normalized()
+        ao += 1 if ray_cast(origin, sample_dir, distance) else 0
+    
     return 1.0 - (ao / samples)
 
 class OBJECT_OT_bake_ao_edge_vertex_colors(Operator):
