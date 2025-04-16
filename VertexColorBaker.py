@@ -4,7 +4,7 @@ bl_info = {
     "version": (0, 2),
     "blender": (4, 4, 0),
     "location": "View3D > 侧边栏 > 烘焙工具",
-    "description": "将环境遮蔽(AO)和边线强度烘焙到顶点颜色，底色为红色，AO和描边颜色可调",
+    "description": "将环境遮蔽(AO)和边线强度烘焙到顶点颜色，底色为红色",
     "category": "物体",
 }
 
@@ -118,7 +118,7 @@ class VertexColorBakerProps(bpy.types.PropertyGroup):
         name="边线强度",
         default=0.9,
         min=0.0,
-        max=1.0,
+        max=10.0,
         description="边线颜色混合强度"
     )
 
@@ -184,8 +184,11 @@ def bake_vertex_colors(context, obj, props):
     edge_angles = {}
     for edge in bm.edges:
         if len(edge.link_faces) == 2:
-            angle = edge.link_faces[0].normal.angle(edge.link_faces[1].normal)
-            edge_angles[edge.index] = angle
+            try:
+                angle = edge.link_faces[0].normal.angle(edge.link_faces[1].normal)
+                edge_angles[edge.index] = angle
+            except ValueError:
+                edge_angles[edge.index] = 0.0
 
     # 顶点边映射
     vertex_edges = {}
@@ -280,13 +283,13 @@ class OBJECT_OT_bake_ao_edge_vertex_colors(Operator):
         try:
             props = context.scene.vertex_color_baker_props
             bake_vertex_colors(context, context.active_object, props)
-            self.report({'INFO'}, "顶点颜色烘焙完成 (底色: 红色), 如果第一次进行烘焙,烘焙完后点击 数据 - 颜色属性 - ")
+            self.report({'INFO'}, "烘焙完成, 如果第一次进行烘焙,烘焙完后点击 数据 - 颜色属性 - ")
             return {'FINISHED'}
         except Exception as e:
-            #self.report({'ERROR'}, f"烘焙失败: {str(e)}")
-            self.report({'INFO'}, "顶点颜色烘焙完成 (底色: 红色), 如果第一次进行烘焙,烘焙完后点击 数据 - 颜色属性 - ")
-            #return {'CANCELLED'}
-            return {'FINISHED'}
+            self.report({'ERROR'}, f"报错: {str(e)}")
+            #self.report({'INFO'}, "顶点颜色烘焙完成 (底色: 红色), 如果第一次进行烘焙,烘焙完后点击 数据 - 颜色属性 - ")
+            return {'CANCELLED'}
+            #return {'FINISHED'}
 
 def register():
     bpy.utils.register_class(VertexColorBakerProps)
