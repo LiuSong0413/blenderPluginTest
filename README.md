@@ -1,4 +1,4 @@
-# VertexColorBaker 0.2
+# VertexColorBaker 0.3
 顶点色烘焙工具
 ![AO](https://github.com/user-attachments/assets/8d22b61e-a2fc-4394-9da3-9ea2136593bf)
 
