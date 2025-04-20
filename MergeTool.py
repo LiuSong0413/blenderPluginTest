@@ -1,13 +1,14 @@
 import bpy
 import bmesh
+import math
 
 bl_info = {
-    "name": "布尔交界优化工具",
+    "name": "合一体优化工具",
     "author": "东东",
-    "version": (0, 1),
+    "version": (0, 3),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Edit Tab",
-    "description": "精确优化布尔运算交叉区域布线，仅优化选中区域(支持调试模式)",
+    "description": "布尔运算交叉区域优化工具，\n包含边缘检测、顶点合并和复杂面查找功能",
     "category": "Mesh",
     "doc_url": "https://github.com/LiuSong0413/VertexColorBaker", 
     "support": "TESTING", 
@@ -30,16 +31,10 @@ class BooleanEdgeOptimizerProperties(bpy.types.PropertyGroup):
         max=1.0
     )
 
-    debug_mode: bpy.props.BoolProperty(
-        name="显示检测结果",
-        description="仅显示检测结果，不修改网格",
-        default=False
-    )
-
-class BooleanEdgeOptimizer(bpy.types.Operator):
-    """优化布尔运算交叉区域布线"""
-    bl_idname = "mesh.boolean_edge_optimizer"
-    bl_label = "布尔交叉区布线优化(增强版)"
+class BooleanEdgeDetector(bpy.types.Operator):
+    """仅检测布尔运算交叉区域"""
+    bl_idname = "mesh.boolean_edge_detector"
+    bl_label = "查找区域"
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
@@ -56,67 +51,124 @@ class BooleanEdgeOptimizer(bpy.types.Operator):
         me = obj.data
         bm = bmesh.from_edit_mesh(me)
 
-        # 检测交界边
         selected_edges = self.select_boolean_edges(bm, props.edge_threshold)
         if not selected_edges:
             self.report({'WARNING'}, "未检测到符合角度的边缘")
             return {'CANCELLED'}
 
-        # 选中相关顶点
-        verts_to_merge = set()
+        bpy.ops.mesh.select_all(action='DESELECT')
         for edge in selected_edges:
-            verts_to_merge.update(edge.verts)
+            edge.select = True
+            for vert in edge.verts:
+                vert.select = True
+        
+        bmesh.update_edit_mesh(me)
+        self.report({'INFO'}, f"找到 {len(selected_edges)} 条布尔交界边")
+        return {'FINISHED'}
 
-        if props.debug_mode:
-            # 只选中检测到的边用于可视化反馈
-            bpy.ops.mesh.select_all(action='DESELECT')
-            for edge in selected_edges:
-                edge.select = True
-            for v in verts_to_merge:
-                v.select = True
-            bmesh.update_edit_mesh(me)
-            self.report({'INFO'}, f"[调试] 选中 {len(selected_edges)} 条边")
-            return {'FINISHED'}
+    def select_boolean_edges(self, bm, angle_threshold):
+        selected_edges = []
+        angle_threshold_rad = math.radians(angle_threshold)
+        
+        for edge in bm.edges:
+            if len(edge.link_faces) == 2 and not edge.is_boundary:
+                face1, face2 = edge.link_faces
+                angle = face1.normal.angle(face2.normal)
+                if angle > angle_threshold_rad:
+                    selected_edges.append(edge)
+        
+        return selected_edges
 
-        # 选择边相关的面，用于 dissolve 优化
+class BooleanEdgeOptimizer(bpy.types.Operator):
+    """优化当前选中区域的顶点，按照合并距离进行合并"""
+    bl_idname = "mesh.boolean_edge_optimizer"
+    bl_label = "合并选中区域相邻点"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        props = context.scene.boolean_edge_optimizer_props
+        obj = context.active_object
+
+        if obj is None or obj.type != 'MESH':
+            self.report({'ERROR'}, "请选择一个网格物体")
+            return {'CANCELLED'}
+
+        if obj.mode != 'EDIT':
+            bpy.ops.object.mode_set(mode='EDIT')
+
+        me = obj.data
+        bm = bmesh.from_edit_mesh(me)
+
+        selected_verts = [v for v in bm.verts if v.select]
+        if not selected_verts:
+            self.report({'WARNING'}, "没有选中的顶点")
+            return {'CANCELLED'}
+
+        verts_to_merge = set(selected_verts)
+
         bpy.ops.mesh.select_all(action='DESELECT')
         for face in bm.faces:
-            face.select = False
-        for edge in selected_edges:
-            for face in edge.link_faces:
-                face.select = True
+            face.select = any(v in verts_to_merge for v in face.verts)
         bmesh.update_edit_mesh(me)
 
-        # dissolve（面优化）
         bpy.ops.mesh.dissolve_limited(angle_limit=0.01, use_dissolve_boundaries=False)
 
-        # 合并近点
         bpy.ops.mesh.select_all(action='DESELECT')
         for v in verts_to_merge:
             v.select = True
         bmesh.update_edit_mesh(me)
         bpy.ops.mesh.remove_doubles(threshold=props.merge_distance)
 
-        # 完成
         bpy.ops.mesh.select_all(action='DESELECT')
         bmesh.update_edit_mesh(me)
 
-        self.report({'INFO'}, f"优化完成！处理了 {len(selected_edges)} 条边")
+        self.report({'INFO'}, f"优化完成！合并了 {len(verts_to_merge)} 个顶点")
         return {'FINISHED'}
 
-    def select_boolean_edges(self, bm, angle_threshold):
+class FindComplexFaces(bpy.types.Operator):
+    """选中所有顶点数大于4的面（五边形及以上）"""
+    bl_idname = "mesh.find_complex_faces"
+    bl_label = "优化复杂面"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        obj = context.active_object
+
+        if obj is None or obj.type != 'MESH':
+            self.report({'ERROR'}, "请选择一个网格物体")
+            return {'CANCELLED'}
+
+        if obj.mode != 'EDIT':
+            bpy.ops.object.mode_set(mode='EDIT')
+
+        me = obj.data
+        bm = bmesh.from_edit_mesh(me)
+        
+        complex_faces = [face for face in bm.faces if len(face.verts) > 4]
+
         bpy.ops.mesh.select_all(action='DESELECT')
-        bpy.ops.mesh.edges_select_sharp(sharpness=angle_threshold)
-        bmesh.update_edit_mesh(bpy.context.active_object.data)
-        return [e for e in bm.edges if e.select]
+        for face in complex_faces:
+            face.select = True
+        bpy.ops.mesh.quads_convert_to_tris(quad_method='BEAUTY', ngon_method='BEAUTY')
+        bpy.ops.mesh.tris_convert_to_quads()
+
+
+        bmesh.update_edit_mesh(me)
+        
+        if complex_faces:
+            self.report({'INFO'}, f"找到 {len(complex_faces)} 个五边形及以上面")
+        else:
+            self.report({'WARNING'}, "未检测到五边形及以上面")
+        
+        return {'FINISHED'}
 
 class BooleanEdgeOptimizerPanel(bpy.types.Panel):
-    """布尔交叉区优化面板"""
-    bl_label = "布尔交界优化工具"
+    """合一体优化面板"""
+    bl_label = "合一体优化工具"
     bl_idname = "OBJECT_PT_boolean_edge_optimizer"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "交界优化"
+    bl_category = "合一体优化"
     bl_context = "mesh_edit"
 
     def draw(self, context):
@@ -124,19 +176,24 @@ class BooleanEdgeOptimizerPanel(bpy.types.Panel):
         props = context.scene.boolean_edge_optimizer_props
 
         box = layout.box()
-        box.label(text="边缘检测设置:")
+        box.label(text="边缘检测设置:", icon='EDGESEL')
         box.prop(props, "edge_threshold")
+        box.operator("mesh.boolean_edge_detector", icon='VIEWZOOM')
 
         box = layout.box()
-        box.label(text="布线优化设置:")
+        box.label(text="顶点合并设置:", icon='AUTOMERGE_ON')
         box.prop(props, "merge_distance")
+        box.operator("mesh.boolean_edge_optimizer", icon='VERTEXSEL')
 
-        layout.prop(props, "debug_mode")
-        layout.operator("mesh.boolean_edge_optimizer")
+        box = layout.box()
+        box.label(text="面复杂度检测:", icon='MESH_DATA')
+        box.operator("mesh.find_complex_faces", icon='UV_FACESEL')
 
 classes = (
     BooleanEdgeOptimizerProperties,
+    BooleanEdgeDetector,
     BooleanEdgeOptimizer,
+    FindComplexFaces,
     BooleanEdgeOptimizerPanel,
 )
 
