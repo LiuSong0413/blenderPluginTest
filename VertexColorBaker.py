@@ -10,13 +10,13 @@ import bpy
 bl_info = {
     "name": "顶点色烘焙工具",
     "author": "东东",
-    "version": (0, 3),
+    "version": (0, 31),
     "blender": (4, 0, 0),
     "location": "View3D > 侧边栏 > 顶点色烘焙工具",
     "description": "将环境遮蔽（AO）和描边烘焙到顶点色的工具",
     "category": "Object",
     "doc_url": "https://github.com/LiuSong0413/VertexColorBaker", 
-    "support": "TESTING", 
+    #"support": "TESTING", 
 }
 
 
