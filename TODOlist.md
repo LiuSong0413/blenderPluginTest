@@ -21,3 +21,7 @@
   
 ### Godot代码自动build _ Godot
 
+### 哈基项目 —— LookDev工具
+- Texel检查
+- 颜色检查
+
