@@ -25,23 +25,26 @@ class MESH_OT_set_bevel_weight_edit(bpy.types.Operator):
         name="倒角权重",
         description="设置选中边的倒角权重（直接覆盖）",
         min=0.0,
-        max=4.0,
+        max=1.0,
         default=1.0,
     )
 
     @classmethod
     def poll(cls, context):
         obj = context.object
-        return obj and obj.type == "MESH" and obj.mode == "EDIT"
+        return obj and obj.type == 'MESH' and obj.mode == 'EDIT'
 
     def execute(self, context):
         obj = context.object
         me = obj.data
         bm = bmesh.from_edit_mesh(me)
 
-        layer = bm.edges.layers.float.get("BevelWeight") or bm.edges.layers.float.new("BevelWeight")
-        sel_edges = [e for e in bm.edges if e.select]
+        # ✅ Blender 4.x 中边权重层名称为 'bevel_weight_edge'
+        layer = bm.edges.layers.float.get("bevel_weight_edge")
+        if not layer:
+            layer = bm.edges.layers.float.new("bevel_weight_edge")
 
+        sel_edges = [e for e in bm.edges if e.select]
         if not sel_edges:
             self.report({'WARNING'}, "未选择任何边")
             return {'CANCELLED'}
