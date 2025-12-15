@@ -1,213 +1,193 @@
-import bpy
-import bmesh
-import math
-
 bl_info = {
-    "name": "合一体优化工具",
-    "author": "东东",
-    "version": (0, 3),
-    "blender": (4, 2, 0),
-    "location": "View3D > Sidebar > Edit Tab",
-    "description": "布尔运算交叉区域优化工具，\n包含边缘检测、顶点合并和复杂面查找功能",
+    "name": "辅助大师 (Modeling Assistant Master)",
+    "author": "Your Name",
+    "version": (2, 0),
+    "blender": (4, 5, 0),
+    "location": "View3D > Sidebar > Modeling Assistant",
+    "description": "快速设置倒角权重，并在对象模式中一键加精简与法线加权修改器",
     "category": "Mesh",
-    "doc_url": "https://github.com/LiuSong0413/VertexColorBaker", 
-    "support": "TESTING", 
 }
 
-class BooleanEdgeOptimizerProperties(bpy.types.PropertyGroup):
-    edge_threshold: bpy.props.FloatProperty(
-        name="边缘角度",
-        description="识别交叉边缘的角度阈值(度)",
-        default=45.0,
-        min=0.001,
-        max=180.0
+import bpy
+import bmesh
+
+
+# ---------------------------------------------------------
+# 编辑模式：倒角权重设定（替换）
+# ---------------------------------------------------------
+class MESH_OT_set_bevel_weight_edit(bpy.types.Operator):
+    """直接设置选中边的 Bevel Weight"""
+    bl_idname = "mesh.set_bevel_weight_edit"
+    bl_label = "应用倒角权重"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    weight: bpy.props.FloatProperty(
+        name="倒角权重",
+        description="设置选中边的倒角权重（直接覆盖）",
+        min=0.0,
+        max=1.0,
+        default=1.0,
     )
 
-    merge_distance: bpy.props.FloatProperty(
-        name="合并距离",
-        description="近点合并的阈值",
-        default=0.001,
-        min=0.00001,
-        max=1.0
-    )
-
-class BooleanEdgeDetector(bpy.types.Operator):
-    """仅检测布尔运算交叉区域"""
-    bl_idname = "mesh.boolean_edge_detector"
-    bl_label = "查找区域"
-    bl_options = {'REGISTER', 'UNDO'}
+    @classmethod
+    def poll(cls, context):
+        obj = context.object
+        return obj and obj.type == 'MESH' and obj.mode == 'EDIT'
 
     def execute(self, context):
-        props = context.scene.boolean_edge_optimizer_props
-        obj = context.active_object
-
-        if obj is None or obj.type != 'MESH':
-            self.report({'ERROR'}, "请选择一个网格物体")
-            return {'CANCELLED'}
-
-        if obj.mode != 'EDIT':
-            bpy.ops.object.mode_set(mode='EDIT')
-
+        obj = context.object
         me = obj.data
         bm = bmesh.from_edit_mesh(me)
 
-        selected_edges = self.select_boolean_edges(bm, props.edge_threshold)
-        if not selected_edges:
-            self.report({'WARNING'}, "未检测到符合角度的边缘")
+        # ✅ Blender 4.x 中边权重层名称为 'bevel_weight_edge'
+        layer = bm.edges.layers.float.get("bevel_weight_edge")
+        if not layer:
+            layer = bm.edges.layers.float.new("bevel_weight_edge")
+
+        sel_edges = [e for e in bm.edges if e.select]
+        if not sel_edges:
+            self.report({'WARNING'}, "未选择任何边")
             return {'CANCELLED'}
 
-        bpy.ops.mesh.select_all(action='DESELECT')
-        for edge in selected_edges:
-            edge.select = True
-            for vert in edge.verts:
-                vert.select = True
-        
-        bmesh.update_edit_mesh(me)
-        self.report({'INFO'}, f"找到 {len(selected_edges)} 条布尔交界边")
+        for e in sel_edges:
+            e[layer] = self.weight
+
+        bmesh.update_edit_mesh(me, destructive=True)
+        self.report({'INFO'}, f"已设置 {len(sel_edges)} 条边的倒角权重 = {self.weight}")
         return {'FINISHED'}
 
-    def select_boolean_edges(self, bm, angle_threshold):
-        selected_edges = []
-        angle_threshold_rad = math.radians(angle_threshold)
-        
-        for edge in bm.edges:
-            if len(edge.link_faces) == 2 and not edge.is_boundary:
-                face1, face2 = edge.link_faces
-                angle = face1.normal.angle(face2.normal)
-                if angle > angle_threshold_rad:
-                    selected_edges.append(edge)
-        
-        return selected_edges
 
-class BooleanEdgeOptimizer(bpy.types.Operator):
-    """优化当前选中区域的顶点，按照合并距离进行合并"""
-    bl_idname = "mesh.boolean_edge_optimizer"
-    bl_label = "合并选中区域相邻点"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    def execute(self, context):
-        props = context.scene.boolean_edge_optimizer_props
-        obj = context.active_object
-
-        if obj is None or obj.type != 'MESH':
-            self.report({'ERROR'}, "请选择一个网格物体")
-            return {'CANCELLED'}
-
-        if obj.mode != 'EDIT':
-            bpy.ops.object.mode_set(mode='EDIT')
-
-        me = obj.data
-        bm = bmesh.from_edit_mesh(me)
-
-        selected_verts = [v for v in bm.verts if v.select]
-        if not selected_verts:
-            self.report({'WARNING'}, "没有选中的顶点")
-            return {'CANCELLED'}
-
-        verts_to_merge = set(selected_verts)
-
-        bpy.ops.mesh.select_all(action='DESELECT')
-        for face in bm.faces:
-            face.select = any(v in verts_to_merge for v in face.verts)
-        bmesh.update_edit_mesh(me)
-
-        bpy.ops.mesh.dissolve_limited(angle_limit=0.01, use_dissolve_boundaries=False)
-
-        bpy.ops.mesh.select_all(action='DESELECT')
-        for v in verts_to_merge:
-            v.select = True
-        bmesh.update_edit_mesh(me)
-        bpy.ops.mesh.remove_doubles(threshold=props.merge_distance)
-
-        bpy.ops.mesh.select_all(action='DESELECT')
-        bmesh.update_edit_mesh(me)
-
-        self.report({'INFO'}, f"优化完成！合并了 {len(verts_to_merge)} 个顶点")
-        return {'FINISHED'}
-
-class FindComplexFaces(bpy.types.Operator):
-    """选中所有顶点数大于4的面（五边形及以上）"""
-    bl_idname = "mesh.find_complex_faces"
-    bl_label = "优化复杂面"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    def execute(self, context):
-        obj = context.active_object
-
-        if obj is None or obj.type != 'MESH':
-            self.report({'ERROR'}, "请选择一个网格物体")
-            return {'CANCELLED'}
-
-        if obj.mode != 'EDIT':
-            bpy.ops.object.mode_set(mode='EDIT')
-
-        me = obj.data
-        bm = bmesh.from_edit_mesh(me)
-        
-        complex_faces = [face for face in bm.faces if len(face.verts) > 4]
-
-        bpy.ops.mesh.select_all(action='DESELECT')
-        for face in complex_faces:
-            face.select = True
-        bpy.ops.mesh.quads_convert_to_tris(quad_method='BEAUTY', ngon_method='BEAUTY')
-        bpy.ops.mesh.tris_convert_to_quads()
-
-
-        bmesh.update_edit_mesh(me)
-        
-        if complex_faces:
-            self.report({'INFO'}, f"找到 {len(complex_faces)} 个五边形及以上面")
-        else:
-            self.report({'WARNING'}, "未检测到五边形及以上面")
-        
-        return {'FINISHED'}
-
-class BooleanEdgeOptimizerPanel(bpy.types.Panel):
-    """合一体优化面板"""
-    bl_label = "合一体优化工具"
-    bl_idname = "OBJECT_PT_boolean_edge_optimizer"
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'UI'
-    bl_category = "合一体优化"
+class VIEW3D_PT_bevel_weight_panel(bpy.types.Panel):
+    """编辑模式面板"""
+    bl_label = "倒角权重快速设置"
+    bl_idname = "VIEW3D_PT_bevel_weight_panel"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "建模辅助"
     bl_context = "mesh_edit"
 
     def draw(self, context):
         layout = self.layout
-        props = context.scene.boolean_edge_optimizer_props
+        scn = context.scene
+        layout.prop(scn, "bw_value", slider=True)
+        op = layout.operator("mesh.set_bevel_weight_edit", text="应用倒角权重")
+        op.weight = scn.bw_value
 
-        box = layout.box()
-        box.label(text="边缘检测设置:", icon='EDGESEL')
-        box.prop(props, "edge_threshold")
-        box.operator("mesh.boolean_edge_detector", icon='VIEWZOOM')
 
-        box = layout.box()
-        box.label(text="顶点合并设置:", icon='AUTOMERGE_ON')
-        box.prop(props, "merge_distance")
-        box.operator("mesh.boolean_edge_optimizer", icon='VERTEXSEL')
+# ---------------------------------------------------------
+# 对象模式：一键精简 & 一键法线加权
+# ---------------------------------------------------------
+class OBJECT_OT_add_decimate_modifier(bpy.types.Operator):
+    """为所选对象添加精简修改器"""
+    bl_idname = "object.add_decimate_modifier"
+    bl_label = "一键精简"
+    bl_options = {'REGISTER', 'UNDO'}
 
-        box = layout.box()
-        box.label(text="面复杂度检测:", icon='MESH_DATA')
-        box.operator("mesh.find_complex_faces", icon='UV_FACESEL')
-
-classes = (
-    BooleanEdgeOptimizerProperties,
-    BooleanEdgeDetector,
-    BooleanEdgeOptimizer,
-    FindComplexFaces,
-    BooleanEdgeOptimizerPanel,
-)
-
-def register():
-    for cls in classes:
-        bpy.utils.register_class(cls)
-    bpy.types.Scene.boolean_edge_optimizer_props = bpy.props.PointerProperty(
-        type=BooleanEdgeOptimizerProperties
+    ratio: bpy.props.FloatProperty(
+        name="精简比率",
+        description="Decimate 修改器比率",
+        min=0.0,
+        max=1.0,
+        default=0.1,
     )
 
+    def execute(self, context):
+        selected_objs = context.selected_editable_objects
+        if not selected_objs:
+            self.report({'WARNING'}, "未选择任何对象")
+            return {'CANCELLED'}
+
+        for obj in selected_objs:
+            if obj.type != 'MESH':
+                continue
+            dec = obj.modifiers.new(name="QuickDecimate", type='DECIMATE')
+            dec.ratio = self.ratio
+            #dec.triangulate = True  # 等价于勾上三角面化
+
+        self.report({'INFO'}, f"已为 {len(selected_objs)} 个对象添加精简修改器")
+        return {'FINISHED'}
+
+
+class OBJECT_OT_add_weighted_normal(bpy.types.Operator):
+    """为所选对象添加加权法线修改器"""
+    bl_idname = "object.add_weighted_normal"
+    bl_label = "一键法线加权"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        selected_objs = context.selected_editable_objects
+        if not selected_objs:
+            self.report({'WARNING'}, "未选择任何对象")
+            return {'CANCELLED'}
+
+        for obj in selected_objs:
+            if obj.type != 'MESH':
+                continue
+            wn = obj.modifiers.new(name="WeightedNormal_Auto", type='WEIGHTED_NORMAL')
+            wn.mode = 'FACE_AREA_WITH_ANGLE'
+            wn.keep_sharp = True
+            #obj.data.use_auto_smooth = True
+
+        self.report({'INFO'}, f"已为 {len(selected_objs)} 个对象添加法线加权修改器")
+        return {'FINISHED'}
+
+
+class VIEW3D_PT_modeling_assist_panel(bpy.types.Panel):
+    """对象模式面板"""
+    bl_label = "建模辅助大师"
+    bl_idname = "VIEW3D_PT_modeling_assist_panel"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "建模辅助"
+    bl_context = "objectmode"
+
+    def draw(self, context):
+        layout = self.layout
+        scn = context.scene
+
+        col = layout.column(align=True)
+        col.label(text="对象模式操作：")
+        col.prop(scn, "decimate_ratio", slider=True)
+        col.operator("object.add_decimate_modifier", text="一键精简").ratio = scn.decimate_ratio
+        layout.separator()
+        layout.operator("object.add_weighted_normal", text="一键法线加权")
+
+
+# ---------------------------------------------------------
+# 注册
+# ---------------------------------------------------------
+classes = (
+    MESH_OT_set_bevel_weight_edit,
+    VIEW3D_PT_bevel_weight_panel,
+    OBJECT_OT_add_decimate_modifier,
+    OBJECT_OT_add_weighted_normal,
+    VIEW3D_PT_modeling_assist_panel,
+)
+
+
+def register():
+    for c in classes:
+        bpy.utils.register_class(c)
+
+    bpy.types.Scene.bw_value = bpy.props.FloatProperty(
+        name="倒角权重",
+        min=0.0, max=4.0, default=1.0,
+        description="倒角权重"
+    )
+    bpy.types.Scene.decimate_ratio = bpy.props.FloatProperty(
+        name="精简比率",
+        min=0.0, max=1.0, default=0.1,
+        description="Decimate 比率"
+    )
+
+
 def unregister():
-    for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
-    del bpy.types.Scene.boolean_edge_optimizer_props
+    for c in reversed(classes):
+        bpy.utils.unregister_class(c)
+
+    del bpy.types.Scene.bw_value
+    del bpy.types.Scene.decimate_ratio
+
 
 if __name__ == "__main__":
     register()
